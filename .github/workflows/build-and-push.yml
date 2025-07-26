@@ -1,0 +1,82 @@
+name: Build and Push Python Requests Image to GHCR
+
+on:
+  push:
+    branches:
+      - main
+  release:
+    types: [published]
+
+env:
+  IMAGE_NAME_BASE: python-requests
+  GHCR_OWNER: ${{ github.repository_owner }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # Required to push images to GHCR
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get Python Version from Dockerfile
+        id: get-python-version
+        run: |
+          # Extract the Python major.minor version from the Dockerfile
+          PYTHON_FULL_VERSION=$(grep -oP 'FROM python:\K[0-9]+\.[0-9]+' Dockerfile | head -1)
+          if [ -z "$PYTHON_FULL_VERSION" ]; then
+            echo "::error::Could not extract Python version from Dockerfile. Please ensure 'FROM python:X.Y-alpine' format is used."
+            exit 1
+          fi
+          echo "Detected Python version: $PYTHON_FULL_VERSION"
+          echo "python_version_short=${PYTHON_FULL_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Get Clean Release Version
+        id: get-release-version
+        # This step only runs if the workflow was triggered by a release
+        if: github.event_name == 'release'
+        run: |
+          # github.ref_name gives the tag name (e.g., 'v2.32.3')
+          # We strip the leading 'v' if it exists.
+          CLEAN_RELEASE_VERSION=$(echo "${{ github.ref_name }}" | sed 's/^v//')
+          echo "Clean Release Version: $CLEAN_RELEASE_VERSION"
+          echo "clean_release_version=${CLEAN_RELEASE_VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ env.GHCR_OWNER }}/${{ env.IMAGE_NAME_BASE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            # Tag with the specific Python version (e.g., python-3.13)
+            type=raw,value=python-${{ steps.get-python-version.outputs.python_version_short }}
+            # Tag with semantic versioning from Git releases (e.g., 2.32.3)
+            type=semver,pattern={{version}}
+            # Composite tag combining Python version and Git release version
+            type=raw,value=${{ steps.get-release-version.outputs.clean_release_version }}-python-${{ steps.get-python-version.outputs.python_version_short }},enable=${{ github.event_name == 'release' }}
+          labels: |
+            org.opencontainers.image.source=${{ github.event.repository.html_url }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.created=${{ github.date }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
