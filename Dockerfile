@@ -5,7 +5,7 @@ FROM python:3.13-alpine
 WORKDIR /app
 
 # Install requests package
-RUN pip install --no-cache-dir requests==2.32.4
+RUN pip install --no-cache-dir requests==2.32.5
 
 # Define the default command to run when the container starts
 # This will print the Python version
